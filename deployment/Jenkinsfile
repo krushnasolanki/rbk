@@ -1,0 +1,349 @@
+//https://groovy-lang.org/json.html
+import groovy.json.JsonOutput
+
+node ('kube_pod_slave || kube_helm_cicd') {
+
+    def stageName
+    def msteamsMessage
+
+    properties(
+        [[$class: 'ParametersDefinitionProperty', parameterDefinitions: [
+                [$class: 'StringParameterDefinition', name: 'DEPLOY_IMAGE_TAG', defaultValue: ''],
+                [$class: 'ChoiceParameterDefinition', choices: 'dev\nsit\nuat\nstaging\nprod',name: 'DEPLOY_ENVIRONMENT',description: 'Environment']
+        ]]]
+    )
+
+    try {
+        stage('initialize') {
+            echo "Running Build #${env.BUILD_ID} on ${env.JOB_NAME} from ${env.BRANCH_NAME}"
+
+            env.IMAGE_NAME = 'dwf-opportunity'
+            env.IMAGE_HOST = 'na.artifactory.taas.kyndryl.net/txo-newco-rbk-team-dev-docker-local'
+            env.IMAGE_HOST_URL = 'https://na.artifactory.taas.kyndryl.net/artifactory/txo-newco-rbk-team-dev-docker-local'
+            sendMsteamsMessage('SUCCESS', 'Initialization is completed')
+        }
+    } catch (e) {
+      msteamsMessage = "Exception while initializing pipeline"
+      sendMsteamsMessage('FAILURE', "${msteamsMessage} \n ${e.getMessage()}" )
+      throw e
+    }
+
+    try {
+        stage('checkout') {
+            stageName = 'checkout'
+            checkout scm
+            env.IMAGE_TAG = sh(returnStdout: true, script: "git rev-parse HEAD").trim()
+            env.GIT_COMMIT_MESSAGE = sh(returnStdout: true, script: "git show -s --format=%B ${IMAGE_TAG}").trim()
+            env.GIT_COMMIT_EMAIL = sh (script: 'git --no-pager show -s --format=\'%ae\'', returnStdout: true).trim()
+            echo "Git committer email: ${GIT_COMMIT_EMAIL}"
+            sendMsteamsMessage('SUCCESS', stageName)
+            echo "Cloned from ${env.BRANCH_NAME}"
+        }
+
+    } catch (e) {
+        msteamsMessage = "Exception while Cloning/Running Test from ${env.BRANCH_NAME}"
+        sendMsteamsMessage('FAILURE', "${msteamsMessage} \n ${e.getMessage()}" )
+        throw e
+    } finally {
+        if (env.CONTAINER_NAME) {
+            sh "docker rm $CONTAINER_NAME -f"
+        }
+    }
+
+    try {
+        if (env.BRANCH_NAME.startsWith("feature") || (env.BRANCH_NAME.equals("develop") && (!env.DEPLOY_IMAGE_TAG?.trim())) || env.BRANCH_NAME.startsWith("PR") || env.BRANCH_NAME.startsWith("hotfix") || env.BRANCH_NAME.startsWith("release")) {
+            stage('Docker Image Build') {
+                stageName = 'Docker Image Build'
+
+                //def rmiDangled = sh(script: 'docker images --filter "dangling=true" -q', returnStdout: true)
+                //echo "Removed Dangled images : ${rmiDangled}"
+
+                //rmiDwfOptyLoad = sh(script: 'docker images --filter="reference=$IMAGE_NAME-cscore:*" -q', returnStdout: true)
+                //echo "Removed $IMAGE_NAME images : ${rmiDwfOptyLoad}"
+                //rmiDwfOptyLoad = sh(script: 'docker images --filter="reference=$IMAGE_HOST/$IMAGE_NAME-cscore:*" -q', returnStdout: true)
+                //echo "Removed $IMAGE_HOST/$IMAGE_NAME images : ${rmiDwfOptyLoad}"
+
+                echo "Building images"
+                def buildInfo
+
+                buildInfo = sh(script: 'docker build -f Dockerfile.cbe -t ${IMAGE_NAME}-cbe .', returnStdout: true)
+
+                if (buildInfo.contains("Successfully tagged $IMAGE_NAME-cbe:")) {
+                    echo "Building cbe images successfully"
+                } else {
+                    echo "$IMAGE_NAME-cbe build information : ${buildInfo}"
+                    error("Error while ${stageName}. Please check Jenkins logs")
+                }
+
+                buildInfo = sh(script: 'docker build -f Dockerfile.cscore -t ${IMAGE_NAME}-cscore .', returnStdout: true)
+
+                if (buildInfo.contains("Successfully tagged $IMAGE_NAME-cscore:")) {
+                    echo "Building cscore images successfully"
+                } else {
+                    echo "$IMAGE_NAME-cscore build information : ${buildInfo}"
+                    error("Error while ${stageName}. Please check Jenkins logs")
+                }
+            }
+        }
+    }
+	catch (e) {
+        msteamsMessage = "Exception while building docker image ${env.IMAGE_NAME}"
+        sendMsteamsMessage('FAILURE', "${msteamsMessage} \n ${e.getMessage()}}")
+        throw e
+    }
+
+    try {
+        if ((env.BRANCH_NAME.equals("develop") && env.DEPLOY_ENVIRONMENT.equals("dev")) || env.BRANCH_NAME.startsWith("hotfix") || env.BRANCH_NAME.startsWith("release")) {
+            stage('Docker Image Push') {
+                stageName = 'Docker Image Push'
+                env.DEPLOY_IMAGE_TAG = env.IMAGE_TAG
+
+                withCredentials([[$class          : 'UsernamePasswordMultiBinding',
+                                  credentialsId: '57c55321-6d39-4745-abf1-ff519e631694',
+                                  usernameVariable: 'REGISTRY_USERNAME',
+                                  passwordVariable: 'REGISTRY_PASSWORD']]) {
+
+                    def dLoginInfo = sh(script: 'docker login -u${REGISTRY_USERNAME} -p ${REGISTRY_PASSWORD} ${IMAGE_HOST}', returnStdout: true)
+
+                    if (dLoginInfo.contains('Login Succeeded')) {
+                        echo "Docker Login Info : ${dLoginInfo}"
+                        def dTagInfo
+                        def dPushInfo
+
+                        //push CBE image
+                        dTagInfo = sh (script: 'docker tag ${IMAGE_NAME}-cbe ${IMAGE_HOST}/${IMAGE_NAME}-cbe:${DEPLOY_IMAGE_TAG}', returnStdout: true)
+                        echo "Docker Tag Info : ${IMAGE_HOST}/${IMAGE_NAME}-cbe:${DEPLOY_IMAGE_TAG}"
+
+                        dPushInfo = sh (script: 'docker push ${IMAGE_HOST}/${IMAGE_NAME}-cbe:${DEPLOY_IMAGE_TAG}', returnStdout: true)
+                        if (dPushInfo.contains('Pushed')) {
+                            echo "Docker Image ${IMAGE_HOST}/${IMAGE_NAME}-cbe:${DEPLOY_IMAGE_TAG} is pushed"
+                        }
+                        else {
+                            echo "$IMAGE_NAME-cbe Push information : ${dPushInfo}"
+                            error("Error while pushing image at stage ${stageName}. Please check Jenkins logs")
+                        }
+
+                        // push CSCORE image
+                        dTagInfo = sh (script: 'docker tag ${IMAGE_NAME}-cscore ${IMAGE_HOST}/${IMAGE_NAME}-cscore:${DEPLOY_IMAGE_TAG}', returnStdout: true)
+                        echo "Docker Tag Info : ${IMAGE_HOST}/${IMAGE_NAME}-cscore:${DEPLOY_IMAGE_TAG}"
+
+                        dPushInfo = sh (script: 'docker push ${IMAGE_HOST}/${IMAGE_NAME}-cscore:${DEPLOY_IMAGE_TAG}', returnStdout: true)
+                        if (dPushInfo.contains('Pushed')) {
+                            echo "Docker Image ${IMAGE_HOST}/${IMAGE_NAME}-cscore:${DEPLOY_IMAGE_TAG} is pushed"
+                        }
+                        else {
+                            echo "$IMAGE_NAME-cscore Push information : ${dPushInfo}"
+                            error("Error while pushing image at stage ${stageName}. Please check Jenkins logs")
+                        }
+                    } else {
+                        echo "Artifactory loging information : ${dLoginInfo}"
+                        error("Error while login to artifactory at stage ${stageName}. Please check Jenkins logs")
+                    }
+                }
+               echo "copying images successfully"
+            }
+        }
+    } catch (e) {
+        msteamsMessage = "Exception while pushing docker image ${env.IMAGE_NAME}"
+        sendMsteamsMessage('FAILURE', "${msteamsMessage} \n ${e.getMessage()}" )
+        throw e
+    }
+
+
+    try {
+        stageName = 'Delivery to dev cluster'
+
+        def skipDelivery = true
+
+//         if (!env.DEPLOY_IMAGE_TAG?.trim()) {
+//             env.DEPLOY_IMAGE_TAG = env.IMAGE_TAG
+//         }
+
+
+      if(env.BRANCH_NAME.equals("develop") && !env.DEPLOY_ENVIRONMENT.equals("sit")){
+          echo "dev Deployment"
+            withCredentials([string(credentialsId: 'ODI_CLOUD_KEY_SIT', variable: 'CLOUD_KEY')]) {
+                env.DEPLOY_ENVIRONMENT = 'dev'
+                echo "insert creds"
+//                 env.DEPLOY_IMAGE_TAG = env.IMAGE_TAG
+                env.ODI_CLOUD_KEY = CLOUD_KEY
+                env.HUB_CLUSTER = "odi-nonprod-dal"
+                env.RESOURCE_GROUP = "newco-dev"
+                env.REGION = "us-south"
+                env.NAME_SPACE = "dev"
+                skipDelivery = false
+            }
+        }
+
+        if(env.DEPLOY_ENVIRONMENT.equals("sit") && !env.DEPLOY_IMAGE_TAG.equals("") ){
+            withCredentials([string(credentialsId: 'ODI_CLOUD_KEY_SIT', variable: 'CLOUD_KEY')]) {
+                env.ODI_CLOUD_KEY = CLOUD_KEY
+                env.HUB_CLUSTER = "odi-nonprod-dal"
+                env.RESOURCE_GROUP = "newco-dev"
+                env.REGION = "us-south"
+                env.NAME_SPACE = "sit"
+                skipDelivery = false
+            }
+        }
+
+
+        if(env.DEPLOY_ENVIRONMENT.equals("uat") && !env.DEPLOY_IMAGE_TAG.equals("")){
+            withCredentials([string(credentialsId: 'ODI_CLOUD_KEY_SIT', variable: 'CLOUD_KEY')]) {
+//                 env.DEPLOY_ENVIRONMENT = 'uat'
+                env.ODI_CLOUD_KEY = CLOUD_KEY
+                env.HUB_CLUSTER = "odi-nonprod-dal"
+                env.RESOURCE_GROUP = "newco-dev"
+                env.REGION = "us-south"
+                env.NAME_SPACE = "uat"
+                skipDelivery = false
+            }
+        }
+
+       if(env.DEPLOY_ENVIRONMENT.equals("staging") && !env.DEPLOY_IMAGE_TAG.equals("")){
+            withCredentials([string(credentialsId: 'ODI_CLOUD_KEY', variable: 'CLOUD_KEY')]) {
+//                 env.DEPLOY_ENVIRONMENT = 'staging'
+                env.ODI_CLOUD_KEY = CLOUD_KEY
+                env.HUB_CLUSTER = "odi-prod-dal2"
+                env.RESOURCE_GROUP = "kyndryl-prod"
+                env.REGION = "us-south"
+                env.NAME_SPACE = "stage"
+                skipDelivery = false
+            }
+        }
+
+       if(env.DEPLOY_ENVIRONMENT.equals("prod") && !env.DEPLOY_IMAGE_TAG.equals("")){
+            withCredentials([string(credentialsId: 'ODI_CLOUD_KEY', variable: 'CLOUD_KEY')]) {
+//                 env.DEPLOY_ENVIRONMENT = 'prod'
+                env.ODI_CLOUD_KEY = CLOUD_KEY
+                env.HUB_CLUSTER = "odi-prod-dal2"
+                env.RESOURCE_GROUP = "kyndryl-prod"
+                env.REGION = "us-south"
+                env.NAME_SPACE = "prod"
+                skipDelivery = false
+            }
+        }
+
+        if(!skipDelivery){
+            stage('Deliver') {
+                sh """
+                    # Makes deployment changes
+                    sed -i "s|{{IMAGE_HOST}}|${IMAGE_HOST}|g" deployment/Cronjob.yaml
+                    sed -i "s|{{IMAGE_NAME}}|${IMAGE_NAME}|g" deployment/Cronjob.yaml
+                    sed -i "s|{{IMAGE_TAG}}|${DEPLOY_IMAGE_TAG}|g" deployment/Cronjob.yaml
+                    sed -i "s|{{NAME_SPACE}}|${NAME_SPACE}|g" deployment/Cronjob.yaml
+                    sed -i "s|{{TARGET_ENV}}|${DEPLOY_ENVIRONMENT}|g" deployment/Cronjob.yaml
+                    sed -i "s|{{NAME_SPACE}}|${NAME_SPACE}|g" deployment/$DEPLOY_ENVIRONMENT/ConfigMap.yaml
+                    sed -i "s|{{NAME_SPACE}}|${NAME_SPACE}|g" deployment/$DEPLOY_ENVIRONMENT/Secrets.yaml
+                    sed -i "s|{{TARGET_ENV}}|${DEPLOY_ENVIRONMENT}|g" deployment/$DEPLOY_ENVIRONMENT/ConfigMap.yaml
+                    sed -i "s|{{TARGET_ENV}}|${DEPLOY_ENVIRONMENT}|g" deployment/$DEPLOY_ENVIRONMENT/Secrets.yaml
+
+                    #cat deployment/Cronjob.yaml
+                    #cat deployment/dev/Secrets.yaml
+                    #cat deployment/dev/ConfigMap.yaml
+
+		    #added by Sheetal to check if the ibmcloud installation suggested by quest-devops works.
+		    #Updating IBM Cloud CLI to align wiht organisation standards. QDWP-14555
+		    echo "Force installing IBM CLoud CLI ..."
+		    #Check if linux is 64 bit
+		    echo "Get Linux uname..."
+		    uname -a
+            echo "The pre-installed version does not help. Force install from internet"
+            curl -fsSL https://clis.cloud.ibm.com/install/linux | sh
+            echo "Printing installed version of IBM CLoud CLI after force update..."
+            ibmcloud --version
+		    #curl -sL "https://ibm.biz/idt-installer install --force" | bash
+		    #curl -sL https://clis.cloud.ibm.com/install/linux | bash
+		    #Verify the installed version of ibmcloud
+		    #echo "Printing installed version of IBM CLoud CLI ..."
+		    #ibmcloud --version
+            #echo "IBM cloud login before installation of plugin"
+            #ibmcloud login --apikey s9gQdZsTWgRUAkqr-z1k_Yndhyrda7y_v_vJ4FVHd9J7 -r us-south -a cloud.ibm.com --quiet
+		    #Install oc plugin
+		    echo "Installing OC plugin"
+                    ibmcloud plugin list
+		    ibmcloud plugin install container-service
+
+                    #ibmcloud login --apikey $ODI_CLOUD_KEY -a cloud.ibm.com -r $REGION -g $RESOURCE_GROUP
+                    ibmcloud -v
+
+                    #ibmcloud ks cluster config --cluster $HUB_CLUSTER
+                    #curl -sL https://ibm.biz/idt-installer | bash
+                    wget https://mirror.openshift.com/pub/openshift-v4/x86_64/clients/ocp/4.6.23/openshift-client-linux-4.6.23.tar.gz
+                    #mv openshift-client-linux-4.6.23.tar.gz /tmp
+                    #cd /tmp
+                    gunzip openshift-client-linux-4.6.23.tar.gz
+                    tar xvf openshift-client-linux-4.6.23.tar
+                    sudo install -o root -g root -m 0755 oc /usr/local/bin/oc
+                    sudo install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl
+
+                    # Log into Openshift Cluster to deploy code
+                    #oc status
+                    oc login -u apikey -p YW2feSoa3UUXhx57vnY0-mUdtR4ND8Z017Do7AmTbekg --server=https://c117-e.us-south.containers.cloud.ibm.com:30015
+
+                    kubectl config current-context
+                    kubectl get nodes
+
+                    # Deploy Configmaps, secrets, Cronjobs
+                    oc apply -n $NAME_SPACE -f deployment/$DEPLOY_ENVIRONMENT/Secrets.yaml
+                    oc apply -n $NAME_SPACE -f deployment/$DEPLOY_ENVIRONMENT/ConfigMap.yaml
+                    oc apply -n $NAME_SPACE -f deployment/Cronjob.yaml
+                    kubectl apply -f deployment/$DEPLOY_ENVIRONMENT/Secrets.yaml
+                    kubectl apply -f deployment/$DEPLOY_ENVIRONMENT/ConfigMap.yaml
+                    kubectl apply -f deployment/Cronjob.yaml
+                """
+            }
+
+          //stage('new relic deploy-marker'){
+                //stageName= 'new_relic_deploy_marker'
+                //echo "Running stage ${stageName}"
+                //env.CAPS_DEPLOY_ENVIRONMENT = env.DEPLOY_ENVIRONMENT.toString().toUpperCase()
+                //withCredentials( [string(credentialsId: "NEW_RELIC_REST_API_KEY", variable: "NEW_RELIC_API_KEY"),
+                                  //string(credentialsId: "NEW_RELIC_CBE_APP_ID_${CAPS_DEPLOY_ENVIRONMENT}", variable: "NEW_RELIC_APP_ID")] ) {
+
+                    //def deployBody= JsonOutput.toJson(
+                        //[deployment:
+                            //[ revision: "${IMAGE_TAG}",
+                              //changelog: "${GIT_COMMIT_MESSAGE}",
+                              //description: "${GIT_COMMIT_MESSAGE}",
+                              //user: "${GIT_COMMIT_EMAIL}"
+                            //]
+                        //])
+
+                    //def newRelicURL = "https://api.newrelic.com/v2/applications/${NEW_RELIC_APP_ID}/deployments.json"
+
+                    //sh "curl -X POST ${newRelicURL} \
+                             //-H 'X-Api-Key:${NEW_RELIC_API_KEY}' \
+                             //-H 'Content-Type:application/json' \
+                             //-i\
+                             //-d \'${deployBody}\'"
+
+                //}
+            //}
+
+            sendMsteamsMessage('SUCCESS', stageName)
+        }
+    } catch (e) {
+        msteamsMessage = "Exception while deploying docker image ${env.IMAGE_NAME}:${env.DEPLOY_IMAGE_TAG} in ${DEPLOY_ENVIRONMENT}"
+        sendMsteamsMessage('FAILURE', "${msteamsMessage} \n ${e.getMessage()}" )
+        throw e
+    }
+}
+
+def sendMsteamsMessage(String buildStatus = 'STARTED', String message) {
+    buildStatus = buildStatus ?: 'SUCCESS'
+
+    def color
+
+    if (buildStatus == 'STARTED') {
+        color = '#D4DADF'
+    } else if (buildStatus == 'SUCCESS') {
+        color = '#BDFFC3'
+    } else if (buildStatus == 'UNSTABLE') {
+        color = '#FFFE89'
+    } else {
+        color = '#FF9FA1'
+    }
+
+    def msg = "${buildStatus}: `${env.JOB_NAME}` #${env.BUILD_NUMBER}:\n${env.BUILD_URL} \n${message}"
+      echo msg
+}

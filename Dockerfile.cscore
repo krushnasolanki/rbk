@@ -1,0 +1,20 @@
+#FROM python:alpine3.7
+FROM python:3.7-slim
+
+WORKDIR /app
+
+CMD python -m app.opportunity_cscore_controller
+
+COPY . /app
+
+RUN apt-get update \
+   && apt-get install -y libxml2-dev \
+   && apt-get install -y gcc \
+   && pip install --upgrade pip \
+   && pip install -r requirements.cscore
+
+
+
+
+
+

@@ -1,0 +1,65 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: configmap-dwf-opportunity-cbe
+  namespace: {{NAME_SPACE}}
+  labels:
+    app: dwf-opportunity-cbe
+data:
+  ENVIRONMENT: dev
+
+  #
+  #HUB API ENVIRONMENT VARIABLES
+  #
+  HUB_API_CERT_PATH: /etc/hub-api-certs
+  HUB_API_HOST_NAME: dev.api.ibm.com
+  HUB_API_HOST_PORT: "443"
+  HUB_API_AUTH_URI: /mihube/bluedev/auth/user
+  HUB_API_TXN_URI: /mihube/bluedev/tx/transactions
+  HUB_API_TXN_JSON_URI: /mihube/bluedev/tx/transactions/{{TX_ID}}/attachments/json
+  HUB_API_TXN_UTIL_URI: /mihube/bluedev/tx/util/ta/{{DNA_ID}}/CSCORE/{{OPPTY_NUM}}/1020/1
+  HUB_API_IBM_CLIENT_ID: 2f121079-5ab5-4bb6-a460-7d1f7c546656
+  # HUB_API_USE_STG is true just for staging env
+  HUB_API_USE_STG: "False"
+  HUB_API_USE_DEV: "True"
+  HUB_API_CLIENT_APP_ID: "1001"
+  #
+  #DATABASE ENVIRONMENT VARIABLES
+  
+  #
+  QUEST_HUB_DB_NAME: BLUDB
+  QUEST_HUB_DB_PORT: "31927"
+  QUEST_HUB_DB_HOST: cc0cedac-11e0-42a8-88a6-97f5636d21dd.bv7c3o6d0vfhru3npds0.databases.appdomain.cloud
+  QUEST_HUB_DB_SCHEMA: Q2CHUB
+  QUEST_HUB_DB_UPDATE_PARENT_OPP: "True"
+  QUEST_HUB_DB_UPDATE_BOM: "True"
+  QUEST_HUB_NEW: "True"
+  QUEST_HUB_ECHO_DEBUG: "False"
+  # Database Changes
+  
+  # QIL ENVIRONMENT VARIABLES
+  #
+  QIL_API_ROW_COUNT: "-1"
+  QIL_API_QIL62_CBEDETAIL_URI: /mihube/bluedev/repositories/62/versions/3/json
+  QIL_API_QIL63_CSCORESTATUS_URI: /mihube/bluedev/repositories/63/versions/7/json
+  QIL_API_QIL64_CSCORE_URI: /mihube/bluedev/repositories/64/versions/2/json
+  #
+  # QUESTHUB CERT MANAGER ENVIRONMENT VARIABLES
+  #
+  CERT_MANAGER_API_ENDPT: https://eu-de.certificate-manager.cloud.ibm.com/api/v2/certificate
+  CERT_MANAGER_IAM_TOKEN_ENDPT: https://iam.cloud.ibm.com/identity/token
+  #
+  # PROCESS ENVIRONMENT VARIABLES
+  #
+  EXCEP_MSTEAMS_CHANNEL: "odi-app-exceptions-{{TARGET_ENV}}"
+  WEBHOOK_URL: "https://kyndryl.webhook.office.com/webhookb2/2e86bdd9-ca27-45b2-a5f6-6d33df615b1c@f260df36-bc43-424c-8f44-c85226657b01/IncomingWebhook/5aced52eaa774c4ea83b777d89474964/96b85c80-fa8c-4557-90e2-172b8e102d8c"
+  LOG_LEVEL: DEBUG
+  EXTRA_LOGGING: "False"
+  API_TIMEOUT_SECONDS: "50"
+  MAX_RETRY_COUNT: "2"
+  MAX_THREADS_COUNT: "4"
+  #
+  # C-SCORE RECALCULATION VARIABLES
+  #
+  CSCORE_RECALC: "False"
+  RECALC_DATE: "2020-09-18"

@@ -1,0 +1,8 @@
+#ignoring following folders to build image
+Dockerfile
+deployment
+build.sh
+deploy.sh
+resources
+env.local
+temp

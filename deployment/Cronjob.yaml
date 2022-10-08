@@ -1,0 +1,75 @@
+apiVersion: batch/v1beta1
+kind: CronJob
+metadata:
+  name: deployment-dwf-opportunity-cbe
+  namespace: {{NAME_SPACE}}
+  labels:
+    app: dwf-opportunity-cbe
+spec:
+  schedule: "*/10 * * * *"
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    metadata:
+      labels:
+        app: dwf-opportunity-cbe
+    spec:
+      template:
+        spec:
+          containers:
+          - name: img-dwf-opportunity-cbe-{{TARGET_ENV}}
+            image: {{IMAGE_HOST}}/{{IMAGE_NAME}}-cbe:{{IMAGE_TAG}}
+            volumeMounts:
+              - mountPath: /etc/hub-api-certs
+                name: hub-api-certs
+                readOnly: true
+            envFrom:
+            - configMapRef:
+                name: configmap-dwf-opportunity-cbe
+            - secretRef:
+                name: secrets-dwf-opportunity-cbe
+          restartPolicy: Never
+          imagePullSecrets:
+            - name: secret-esa-docker
+          volumes:
+            - name: hub-api-certs
+              secret:
+                secretName: hub-api-certs
+      backoffLimit: 0
+---
+apiVersion: batch/v1beta1
+kind: CronJob
+metadata:
+  name: deployment-dwf-opportunity-cscore
+  namespace: {{NAME_SPACE}}
+  labels:
+    app: dwf-opportunity-cscore
+spec:
+  schedule: "*/10 * * * *"
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    metadata:
+      labels:
+        app: dwf-opportunity-cscore
+    spec:
+      template:
+        spec:
+          containers:
+          - name: img-dwf-opportunity-cscore-{{TARGET_ENV}}
+            image: {{IMAGE_HOST}}/{{IMAGE_NAME}}-cscore:{{IMAGE_TAG}}
+            volumeMounts:
+              - mountPath: /etc/hub-api-certs
+                name: hub-api-certs
+                readOnly: true
+            envFrom:
+            - configMapRef:
+                name: configmap-dwf-opportunity-cbe
+            - secretRef:
+                name: secrets-dwf-opportunity-cbe
+          restartPolicy: Never
+          imagePullSecrets:
+            - name: secret-esa-docker
+          volumes:
+            - name: hub-api-certs
+              secret:
+                secretName: hub-api-certs
+      backoffLimit: 0
